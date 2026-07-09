@@ -1,0 +1,133 @@
+Map.addLayer(css)
+Map.centerObject(css, 10)
+var image = sent.filterDate('2026-02-01', '2026-02-28').filterBounds(css)
+.filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10)).mean().divide(10000).clip(css)
+print(image)
+
+Map.addLayer(image, {min: 0.022, max: 0.184475, bands:['B11', 'B8', 'B3']}, 'image_fevrier')
+var points = ee.FeatureCollection([
+  culture_pdv, water, solnu, culture_fdv])
+  
+  //// CONSTUMIZE MU CHART
+  
+  var options = {
+    title: 'signature_spectrale',
+    hAxis: {title: 'bands,indice'},
+    vAxis:{title: '%reflectance'},
+    lineWidth: 1,
+    pointSize: 5,
+    scale: 0.1,
+    
+  serie :{
+    0:{color: 'green'},
+    1:{color: 'blue'},
+    2:{color: 'yellow'},
+    3:{color: 'brown'}
+  }}
+  
+  /////defini mon chart
+  var spectrchart = ui.Chart.image.regions(
+    image, points, ee.Reducer.mean(), 10, 'label')
+    .setChartType('LineChart')
+    .setOptions(options)
+    
+    print(spectrchart)
+    
+    /////teleharger mes données 
+    ////////exporter l'image vers drive 
+  Export.image.toDrive({
+      image: image, description: 'image_fevrier', folder:'css',region:css, scale: 10, maxPixels:1e0
+   })
+    
+    
+    /////les indices de vegetation 
+    //////////bands=(B8-B4)/(B8+B4)
+    
+    var ndvi_fevrier = image.expression(
+      '(B8-B4/B8+B4)', {
+        'B8': image.clip(css).select('B8'),
+        'B4': image.clip(css).select('B4')
+         }).rename('NDVI_fevrier')
+         
+  Map.addLayer(ndvi_fevrier, {min: -0.3, max: 0.3, palette: ['#ff351c', '#ffbd18', '#12bfff', '#13cb1f']}, 'ndvi_fevrier')
+
+///////////////mask_ndvi pour  identifier les sols  Layer7
+var mask = ndvi_fevrier.lt(0.10)
+var new_ndvi = ndvi_fevrier.updateMask(mask)
+Map.addLayer(new_ndvi)
+////////Map.addLayer(new_ndvi, {min: -0.3, max: 0.1, palette: ['#ff351c', '#ffbd18', '#12bfff', '#13cb1f']}, 'nnew_mask')
+
+/////RNDE
+ var rnde_fevrier = image.expression(
+      '(NIR-RE/NIR+RE)', {
+        'NIR': image.clip(css).select('B8'),
+        'RE': image.clip(css).select('B5')
+         }).rename('RNDE_fevrier')
+         
+  Map.addLayer(rnde_fevrier, {min: -0.3, max: 0.3, palette: ['#ff351c', '#ffbd18', '#12bfff', '#13cb1f']}, 'rnde_fevrier')
+
+    
+/////////: : savi = ((nir-red)/(nir+red)*1.5
+var savi_fevrier = image.expression(
+  '(nir-red/nir+red)', {
+  'nir': image.clip(css).select('B8'),
+  'red': image.clip(css).select('B4') 
+  }).rename('SAVI_fevrier')
+      
+Map.addLayer(savi_fevrier, {min: 1.2, max: 0.4, palette: ['#ff4d12', '#e3ff2e', '#ffeac0', '#34ff83']}, 'savi_fevrier')
+  
+//////indices des couleurs et de luminosité
+
+
+////////// Brightness index BI = sqrt((R*R+ NIR*NIR)/2 renseigne sur la teneur en MO du sol
+var bi_fevrier = image.expression(
+  'sqrt(R*R+(NIR*NIR)/2)',{
+    'R': image.clip(css).select('B4'),
+    'NIR': image.clip(css).select('B8')
+  }).rename('bi_fevrier')
+
+Map.addLayer(bi_fevrier, {min: -0.1, max: 0.4, palette: ['#ff351c', '#ffbd18', '#12bfff', '#13cb1f']}, 'bi_fevrier')
+
+/////////mask sur BI layer7
+var new_bi = bi_fevrier.updateMask(mask)
+Map.addLayer(new_bi)
+
+//////////le RI qui renseigne sur l'oxydation du fer
+var RI_fevrier = image.expression(
+  'red*red/(Blue*Green*Green*Green)', {
+  'red': image.clip(css).select('B4'),
+  'Blue': image.clip(css).select('B2'),
+  'Green': image.clip(css).select('B3') 
+  }).rename('RI_fevrier')
+
+Map.addLayer(RI_fevrier, {min: 73.2, max: 626.8, palette: ['#ff351c', '#ffbd18', '#12bfff', '#13cb1f']}, 'RI_fevrier')
+
+/////////mask sur RI layer8
+var new_RI = RI_fevrier.updateMask(mask)
+Map.addLayer(new_RI)
+
+
+//////1-Calcul de RVI (radalr vegetation indice)= 4*VH/VV+VH 
+/////même objectif que le ndvi mais juste que le rvi utilise un radar qui n'est
+
+var s1 = ee.ImageCollection('COPERNICUS/S1_GRD')
+  .filterBounds(css) 
+  .filterDate('2026-01-01', '2026-01-31')
+  .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+  .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
+  .filter(ee.Filter.eq('instrumentMode', 'IW'))
+  .filter(ee.Filter.eq('orbitProperties_pass', 'ASCENDING'))
+  .select('VV', 'VH')
+  .median().clip(css);
+  
+  //////2-Convertir de l'échelle Logarithmique (dB) à l'échelle Linéaire
+  var vhLinear = ee.Image(10).pow(s1.select('VH').divide(10));
+  var vvLinear = ee.Image(10).pow(s1.select('VV').divide(10))
+  
+///// 3-Calculer le RVI
+var rvi = vhLinear.multiply(4).divide(vvLinear.add(vhLinear)).rename('RVI');
+
+///// 4-Affichage
+Map.centerObject(css, 10);
+var rviVis = {min:-0.3, max:1.2, palette: ['#ff351c', '#ffbd18', '#12bfff', '#13cb1f']};
+Map.addLayer(rvi, rviVis, 'Radar Vegetation Index');
