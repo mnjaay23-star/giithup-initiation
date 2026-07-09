@@ -1,0 +1,178 @@
+Map.addLayer(fgn)
+Map.centerObject(fgn, 10)
+var image = S2.filterDate('2017-01-01', '2017-01-31').filterBounds(fgn)
+.filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10)).mean().divide(10000).clip(fgn)
+print(image)
+
+Map.addLayer(image, {min: 0, max: 0.22, bands:['B11', 'B8', 'B3']}, 'image_janvier')
+
+/////les indices de vegetation 
+
+//////le ndvi/////////
+//////////bands=(B8-B4)/(B8+B4)
+    
+var ndvi_janvier = image.expression(
+      '(B8-B4/B8+B4)', {
+        'B8': image.clip(fgn).select('B8'),
+        'B4': image.clip(fgn).select('B4')
+         }).rename('NDVI_janvier')
+         
+Map.addLayer(ndvi_janvier, {min: -6.04, max: 0.19, palette: ['#ff351c', '#ffbd18', '#12bfff', '#13cb1f']}, 'ndvi_janvier')
+  
+  /////RNDE
+ ///var rnde_janvier = image.expression(
+    /////  '(NIR-RE/NIR+RE)', {
+        //'NIR': image.clip(fgn).select('B8'),
+        ///'RE': image.clip(fgn).select('B5')
+         //}).rename('RNDE_janvier')
+         
+  //Map.addLayer(rnde_janvier, {min: -3.67, max: 0.02, palette: ['#ff351c', '#ffbd18', '#12bfff', '#13cb1f']}, 'rnde_janvier')
+  
+  
+  /////1-Calcul de RVI (radalr vegetation indice)= 4*VH/VV+VH 
+/////même objectif que le ndvi mais juste que le rvi utilise un radar qui n'est
+
+var L8 = ee.ImageCollection('COPERNICUS/S1_GRD')
+  .filterBounds(fgn) 
+  .filterDate('2026-01-01', '2026-01-31')
+  .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+  .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
+  .filter(ee.Filter.eq('instrumentMode', 'IW'))
+  .filter(ee.Filter.eq('orbitProperties_pass', 'ASCENDING'))
+  .select('VV', 'VH')
+  .median().clip(fgn);
+  
+   //////2-Convertir de l'échelle Logarithmique (dB) à l'échelle Linéaire
+var vhLinear = ee.Image(10).pow(L8.select('VH').divide(10));
+var vvLinear = ee.Image(10).pow(L8.select('VV').divide(10))
+  
+///// 3-Calculer le RVI
+var rvi = vhLinear.multiply(4).divide(vvLinear.add(vhLinear)).rename('RVI');
+
+///// 4-Affichage
+Map.centerObject(fgn, 10);
+var rviVis = {min:0.18, max:1.09, palette: ['#ff351c', '#ffbd18', '#12bfff', '#13cb1f']};
+Map.addLayer(rvi, rviVis, 'Radar Vegetation Index');
+  
+
+
+////////NDRE la végétation
+var ndre_fevrier = image.expression(
+      '(NIR-RE/NIR+RE)', {
+        'NIR': image.clip(fgn).select('B8'),
+        'RE': image.clip(fgn).select('B5')
+         }).rename('NDRE_fevrier')
+         
+Map.addLayer(ndre_fevrier, {min: -3.69, max: 0.03, palette: ['#ff351c', '#ffbd18', '#12bfff', '#13cb1f']}, 'ndre_fevrier')
+  
+/////////: : savi = ((nir-red)/(nir+red)*1.5 inquique les sols nus 
+var savi_janvier = image.expression(
+  '(nir-red/nir+red)', {
+  'nir': image.clip(fgn).select('B8'),
+  'red': image.clip(fgn).select('B4') 
+  }).rename('SAVI_janvier')
+      
+Map.addLayer(savi_janvier, {min: -4.33, max: 0.20, palette: ['#ff4d12', '#e3ff2e', '#ffeac0', '#34ff83']}, 'savi_janvier')
+  
+  
+////////// Brightness index BI = sqrt((R*R+ NIR*NIR)/2 renseigne sur la teneur en MO du sol
+var bi_janvier = image.expression(
+  'sqrt(R*R+(NIR*NIR)/2)',{
+    'R': image.clip(fgn).select('B4'),
+    'NIR': image.clip(fgn).select('B8')
+  }).rename('bi_janvier')
+
+Map.addLayer(bi_janvier, {min: -0.009, max: 0.419, palette: ['#ff351c', '#ffbd18', '#12bfff', '#13cb1f']}, 'bi_janvier')
+
+
+////Les indes de sols
+
+
+//////////le RI qui renseigne sur l'oxydation du fer
+var RI_janvier = image.expression(
+  'red*red/(Blue*Green*Green*Green)', {
+  'red': image.clip(fgn).select('B4'),
+  'Blue': image.clip(fgn).select('B2'),
+  'Green': image.clip(fgn).select('B3') 
+  }).rename('RI_janvier')
+
+Map.addLayer(RI_janvier, {min: 0, max: 36.5, palette: ['#ff351c', '#ffbd18', '#12bfff', '#13cb1f']}, 'RI_janvier')
+
+//////stack///////
+var stack= image.select(['B2','B3','B4','B5','B6','B7','B8','B8A','B11','B12'])
+//// pour les bands si dessous  on prend le nom de la variable au lieux de celui du layer
+.addBands(ndvi_janvier) 
+.addBands(savi_janvier)
+.addBands(ndre_fevrier)
+.addBands(bi_janvier)
+.addBands(rvi)
+.addBands(RI_janvier)
+print ('stack compet (10 bands+ 14 indices) :',stack);
+print ('nombres totale de bandes:' ,stack.bandNames().length());
+print ('Noms des bandes :',stack);
+
+////Labélisation
+// var points = ee.FeatureCollection([
+//   mangrove, water, vasiere, solnu])/// pour tracer la sig,ature spectrale mais ici on 
+  
+  ////réassiganation 'landcover' c'es vla couche de sortie
+var mangrove_s= mangrove.map(function(f){return f.set('landcover',0);});
+var vasiere_s= vasiere.map(function(f){return f.set('landcover',1);});
+var water_s= water.map(function(f){return f.set('landcover',2);});
+var solnu_s= solnu.map(function(f){return f.set('landcover',3);});
+  
+  /////fusion les colonnes aléatoire
+var sample = mangrove_s.merge(vasiere_s).merge(water_s).merge(solnu_s) ///sample = tableau qui regroupe les var
+  .randomColumn('random', 42);
+  print('Total points:', sample.size()) 
+  
+  ////EXTRACTION VAlEURS DU STACK
+var echantillons = stack.sampleRegions({
+    collection: sample,
+    properties: ['landcover', 'random'],
+    scale: 10,
+    tileScale: 10,
+    geometries: false
+  });
+  
+// /////suppression valeurs nulle/////
+var echantillons_clean = echantillons.filter(
+  ee.Filter.notNull(stack.bandNames())
+);
+  
+print( 'Echantillons extraits:',echantillons_clean .size());
+print( 'Echantillons apres filter:',echantillons_clean.size());
+
+/////Split 70% / 30% c'est-a-dire 70% pour l'enttrainement et 30% pour le test
+var train = echantillons_clean .filter(ee.Filter.lt('random', 0.7)); ///lt= less than (moins que)
+var test = echantillons_clean .filter(ee.Filter.gte('random', 0.7));
+
+print('train:',train.size());
+print('test :',test.size());
+
+var predicteurs = stack.bandNames();///nom des bandes
+
+/////model RandomForest
+var modele =ee.Classifier.smileRandomForest({
+  numberOfTrees: 1000,////nombre d'arbres
+  variablesPerSplit: null,
+  minLeafPopulation: 1,/// min de feuilles de population
+  bagFraction:0.5,/// sac de fraction
+  maxNodes: null,///max nombre de noeuds
+  seed: 42 // fixer
+}).train({
+  features: train,
+  classProperty: 'landcover',///class de sorties
+  inputProperties: predicteurs
+});
+
+/////classification
+var classification = stack.classify(modele).clip(fgn);
+var palette = ['#29b038', '#ffbd18', '#2e48ff', '#828fa1'];
+Map.addLayer(classification, {min: 0, max: 3, palette: palette}, 'calssification RF');
+
+////teleharger mes données 
+    ////////exporter l'image vers drive 
+  Export.image.toDrive({
+      image: classification, description: 'calssif_RF_2017', folder:'fgn',region:fgn, scale: 10, maxPixels:1e13
+   })
